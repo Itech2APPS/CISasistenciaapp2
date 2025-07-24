@@ -6,12 +6,18 @@ import re
 import calendar
 import io
 
-# === Funciones auxiliares ===
+# Diccionario de meses en español
+MESES_ES = {
+    1: "ENERO", 2: "FEBRERO", 3: "MARZO", 4: "ABRIL",
+    5: "MAYO", 6: "JUNIO", 7: "JULIO", 8: "AGOSTO",
+    9: "SEPTIEMBRE", 10: "OCTUBRE", 11: "NOVIEMBRE", 12: "DICIEMBRE"
+}
+
 def extraer_mes(texto):
     match = re.search(r"Periodo desde\s+(\d{2})/(\d{2})/(\d{4})", texto)
     if match:
         numero_mes = int(match.group(2))
-        return calendar.month_name[numero_mes].upper()
+        return MESES_ES.get(numero_mes, "MES")
     return "MES"
 
 def extraer_rut(texto):
@@ -22,6 +28,10 @@ def extraer_rut(texto):
     return "RUT_NO_ENCONTRADO"
 
 def extraer_nombre(texto):
+    match = re.search(r"(\d{1,2}\.?\d{3}\.?\d{3}-[\dkK])\s*-\s*([A-ZÑÁÉÍÓÚ ]+)", texto)
+    if match:
+        return match.group(2).strip()
+    # Fallback si no encuentra con guión
     lineas = texto.splitlines()
     for i, linea in enumerate(lineas):
         if re.match(r"\d{1,2}\.?\d{3}\.?\d{3}-[\dkK]", linea.strip()):
