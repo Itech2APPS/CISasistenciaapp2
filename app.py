@@ -1,99 +1,87 @@
-
 import streamlit as st
-from PyPDF2 import PdfReader, PdfWriter
-from pathlib import Path
 import zipfile
-import re
-import calendar
 import io
+import re
 import unicodedata
+from PyPDF2 import PdfReader, PdfWriter
+from datetime import datetime
+import calendar
+import locale
 
-MESES_ES = {
-    1: "ENERO", 2: "FEBRERO", 3: "MARZO", 4: "ABRIL",
-    5: "MAYO", 6: "JUNIO", 7: "JULIO", 8: "AGOSTO",
-    9: "SEPTIEMBRE", 10: "OCTUBRE", 11: "NOVIEMBRE", 12: "DICIEMBRE"
-}
+# Forzar español para nombre de meses
+try:
+    locale.setlocale(locale.LC_TIME, "es_ES.UTF-8")
+except:
+    try:
+        locale.setlocale(locale.LC_TIME, "es_CL.UTF-8")
+    except:
+        pass  # fallback a inglés si no disponible
 
-def quitar_acentos(texto):
-    return ''.join(
-        c for c in unicodedata.normalize('NFKD', texto)
-        if not unicodedata.combining(c)
+def extraer_datos(texto):
+    # Mes desde "Periodo desde"
+    match_periodo = re.search(r"Periodo desde\s+(\d{2})/\d{2}/\d{4}", texto)
+    mes_num = match_periodo.group(1) if match_periodo else None
+    mes_nombre = (
+        calendar.month_name[int(mes_num)].capitalize() if mes_num else "DESCONOCIDO"
     )
 
-def extraer_mes(texto):
-    match = re.search(r"Periodo desde\s+(\d{2})/(\d{2})/(\d{4})", texto)
-    if match:
-        numero_mes = int(match.group(2))
-        return MESES_ES.get(numero_mes, "MES")
-    return "MES"
+    # RUT (evita el de la empresa)
+    rut_match = re.search(r"(\d{1,2}\.\d{3}\.\d{3}-\d)", texto)
+    if rut_match and rut_match.group(1).startswith("65.191"):
+        return None, None, None
 
-def extraer_rut(texto):
-    ruts = re.findall(r"\d{1,2}\.?\d{3}\.?\d{3}-[\dkK]", texto)
-    for rut in ruts:
-        if not rut.startswith("65.191"):
-            return rut.replace(".", "")
-    return "RUT_NO_ENCONTRADO"
+    rut = rut_match.group(1) if rut_match else "RUT_NO_ENCONTRADO"
 
-def extraer_nombre(texto):
-    lineas = texto.splitlines()
-    for i, linea in enumerate(lineas):
-        rut_match = re.match(r"\d{1,2}\.?\d{3}\.?\d{3}-[\dkK]", linea.strip())
-        if rut_match:
-            rut = rut_match.group(0)
-            if not rut.startswith("65.191") and i + 1 < len(lineas):
-                nombre_candidato = lineas[i + 1].strip()
-                if re.match(r"^[A-ZÑÁÉÍÓÚ]{2,}( [A-ZÑÁÉÍÓÚ]{2,}){1,}$", nombre_candidato):
-                    return nombre_candidato
-    return "NOMBRE_NO_ENCONTRADO"
+    # Nombre completo justo después del RUT
+    nombre_match = re.search(r"\d{1,2}\.\d{3}\.\d{3}-\d\s+([A-ZÑÁÉÍÓÚ\s]+)", texto)
+    nombre = (
+        nombre_match.group(1).strip().title().replace("  ", " ")
+        if nombre_match
+        else "NOMBRE_NO_ENCONTRADO"
+    )
 
-def generar_pdfs_desde_pares(pdf_file):
-    reader = PdfReader(pdf_file)
-    archivos = []
+    return mes_nombre, rut, nombre
 
-    for i in range(0, len(reader.pages), 2):
-        page = reader.pages[i]
-        texto = page.extract_text()
+def normalizar_nombre(nombre):
+    return unicodedata.normalize("NFKD", nombre).encode("ASCII", "ignore").decode()
 
-        mes = extraer_mes(texto)
-        rut = extraer_rut(texto)
-        nombre = extraer_nombre(texto)
-        nombre_sin_acentos = quitar_acentos(nombre)
-
-        nombre_archivo = f"ASISTENCIA_{mes}_{rut}_{nombre_sin_acentos}".replace(" ", "_") + ".pdf"
-
-        buffer = io.BytesIO()
-        writer = PdfWriter()
-        writer.add_page(page)
-        writer.write(buffer)
-        archivos.append((nombre_archivo, buffer.getvalue()))
-
-    return archivos
-
-def crear_zip(archivos_pdf):
+def procesar_pdf(pdf_subido):
+    reader = PdfReader(pdf_subido)
     zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, "w") as zipf:
-        for nombre, contenido in archivos_pdf:
-            zipf.writestr(nombre, contenido)
-    return zip_buffer.getvalue()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+        for i in range(0, len(reader.pages), 2):  # páginas impares
+            writer = PdfWriter()
+            writer.add_page(reader.pages[i])
 
-st.set_page_config(page_title="Generador de Asistencias", layout="centered")
-st.title("📄 Generador de archivos de Asistencia")
-st.markdown("Sube un archivo PDF con múltiples asistencias. Se generarán archivos individuales por empleado (páginas impares) y podrás descargar todo en un `.zip`.")
+            texto = reader.pages[i].extract_text()
+            mes, rut, nombre = extraer_datos(texto)
 
-archivo = st.file_uploader("📤 Sube tu archivo PDF", type=["pdf"])
+            if not all([mes, rut, nombre]):
+                continue
 
-if archivo:
-    with st.spinner("Procesando el archivo..."):
-        archivos_generados = generar_pdfs_desde_pares(archivo)
-        if not archivos_generados:
-            st.error("No se encontraron páginas impares válidas.")
-        else:
-            zip_data = crear_zip(archivos_generados)
-            st.success(f"{len(archivos_generados)} archivos generados correctamente.")
+            nombre_normalizado = normalizar_nombre(nombre)
+            filename = f"ASISTENCIA_{mes.upper()}_{rut}_{nombre_normalizado.upper()}.pdf"
 
-            st.download_button(
-                label="📦 Descargar ZIP",
-                data=zip_data,
-                file_name="asistencias_generadas.zip",
-                mime="application/zip"
-            )
+            pdf_buffer = io.BytesIO()
+            writer.write(pdf_buffer)
+            zip_file.writestr(filename, pdf_buffer.getvalue())
+
+    zip_buffer.seek(0)
+    return zip_buffer
+
+# Interfaz Streamlit
+st.title("Separador de PDF por Empleado (Páginas Impares)")
+st.write("Sube un archivo PDF de asistencia y descarga los archivos individuales por empleado.")
+
+pdf_file = st.file_uploader("Sube tu PDF", type=["pdf"])
+
+if pdf_file is not None:
+    with st.spinner("Procesando..."):
+        zip_resultado = procesar_pdf(pdf_file)
+    st.success("¡Listo! Descarga el ZIP con los archivos generados.")
+    st.download_button(
+        label="📦 Descargar ZIP",
+        data=zip_resultado,
+        file_name="asistencias_separadas.zip",
+        mime="application/zip",
+    )
