@@ -30,7 +30,7 @@ def extraer_datos(texto):
     else:
         return None, None, None
 
-    match_nombre = re.search(r"\d{1,2}\.\d{3}\.\d{3}-\d\s+([A-ZÑÁÉÍÓÚ\s]+)", texto)
+    match_nombre = re.search(r"\d{1,2}\.\d{3}\.\d{3}-\d\s+([A-ZÑÁÉÍÓÚ]+(?:\s+[A-ZÑÁÉÍÓÚ]+)+)", texto)
     nombre = (
         match_nombre.group(1).strip().title().replace("  ", " ")
         if match_nombre else "NOMBRE_NO_ENCONTRADO"
