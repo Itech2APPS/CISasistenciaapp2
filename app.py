@@ -1,3 +1,4 @@
+
 import streamlit as st
 from PyPDF2 import PdfReader, PdfWriter
 from pathlib import Path
@@ -5,13 +6,19 @@ import zipfile
 import re
 import calendar
 import io
+import unicodedata
 
-# Diccionario de meses en español
 MESES_ES = {
     1: "ENERO", 2: "FEBRERO", 3: "MARZO", 4: "ABRIL",
     5: "MAYO", 6: "JUNIO", 7: "JULIO", 8: "AGOSTO",
     9: "SEPTIEMBRE", 10: "OCTUBRE", 11: "NOVIEMBRE", 12: "DICIEMBRE"
 }
+
+def quitar_acentos(texto):
+    return ''.join(
+        c for c in unicodedata.normalize('NFKD', texto)
+        if not unicodedata.combining(c)
+    )
 
 def extraer_mes(texto):
     match = re.search(r"Periodo desde\s+(\d{2})/(\d{2})/(\d{4})", texto)
@@ -28,30 +35,31 @@ def extraer_rut(texto):
     return "RUT_NO_ENCONTRADO"
 
 def extraer_nombre(texto):
-    match = re.search(r"(\d{1,2}\.?\d{3}\.?\d{3}-[\dkK])\s*-\s*([A-ZÑÁÉÍÓÚ ]+)", texto)
-    if match:
-        return match.group(2).strip()
-    # Fallback si no encuentra con guión
     lineas = texto.splitlines()
     for i, linea in enumerate(lineas):
-        if re.match(r"\d{1,2}\.?\d{3}\.?\d{3}-[\dkK]", linea.strip()):
-            if not linea.strip().startswith("65.191") and i + 1 < len(lineas):
-                return lineas[i + 1].strip()
+        rut_match = re.match(r"\d{1,2}\.?\d{3}\.?\d{3}-[\dkK]", linea.strip())
+        if rut_match:
+            rut = rut_match.group(0)
+            if not rut.startswith("65.191") and i + 1 < len(lineas):
+                nombre_candidato = lineas[i + 1].strip()
+                if re.match(r"^[A-ZÑÁÉÍÓÚ]{2,}( [A-ZÑÁÉÍÓÚ]{2,}){1,}$", nombre_candidato):
+                    return nombre_candidato
     return "NOMBRE_NO_ENCONTRADO"
 
 def generar_pdfs_desde_pares(pdf_file):
     reader = PdfReader(pdf_file)
     archivos = []
 
-    for i in range(0, len(reader.pages), 2):  # Solo páginas impares
+    for i in range(0, len(reader.pages), 2):
         page = reader.pages[i]
         texto = page.extract_text()
 
         mes = extraer_mes(texto)
         rut = extraer_rut(texto)
         nombre = extraer_nombre(texto)
+        nombre_sin_acentos = quitar_acentos(nombre)
 
-        nombre_archivo = f"ASISTENCIA_{mes}_{rut}_{nombre}".replace(" ", "_") + ".pdf"
+        nombre_archivo = f"ASISTENCIA_{mes}_{rut}_{nombre_sin_acentos}".replace(" ", "_") + ".pdf"
 
         buffer = io.BytesIO()
         writer = PdfWriter()
@@ -68,7 +76,6 @@ def crear_zip(archivos_pdf):
             zipf.writestr(nombre, contenido)
     return zip_buffer.getvalue()
 
-# === Interfaz de Streamlit ===
 st.set_page_config(page_title="Generador de Asistencias", layout="centered")
 st.title("📄 Generador de archivos de Asistencia")
 st.markdown("Sube un archivo PDF con múltiples asistencias. Se generarán archivos individuales por empleado (páginas impares) y podrás descargar todo en un `.zip`.")
