@@ -3,85 +3,91 @@ import zipfile
 import io
 import re
 import unicodedata
-from PyPDF2 import PdfReader, PdfWriter
-from datetime import datetime
 import calendar
 import locale
+import pdfplumber
+from PyPDF2 import PdfWriter
+from pathlib import Path
 
-# Forzar español para nombre de meses
+# Configura español para el nombre del mes
 try:
     locale.setlocale(locale.LC_TIME, "es_ES.UTF-8")
 except:
     try:
         locale.setlocale(locale.LC_TIME, "es_CL.UTF-8")
     except:
-        pass  # fallback a inglés si no disponible
+        pass
 
+# Normaliza texto (elimina acentos)
+def normalizar_nombre(nombre):
+    return unicodedata.normalize("NFKD", nombre).encode("ASCII", "ignore").decode()
+
+# Extrae mes, rut, nombre
 def extraer_datos(texto):
-    # Mes desde "Periodo desde"
-    match_periodo = re.search(r"Periodo desde\s+(\d{2})/\d{2}/\d{4}", texto)
-    mes_num = match_periodo.group(1) if match_periodo else None
-    mes_nombre = (
-        calendar.month_name[int(mes_num)].capitalize() if mes_num else "DESCONOCIDO"
-    )
+    match_fecha = re.search(r"Periodo desde\s+(\d{2})/\d{2}/\d{4}", texto)
+    mes_num = int(match_fecha.group(1)) if match_fecha else None
+    mes_nombre = calendar.month_name[mes_num].capitalize() if mes_num else "Desconocido"
 
-    # RUT (evita el de la empresa)
-    rut_match = re.search(r"(\d{1,2}\.\d{3}\.\d{3}-\d)", texto)
-    if rut_match and rut_match.group(1).startswith("65.191"):
-        return None, None, None
+    match_rut = re.search(r"(\d{1,2}\.\d{3}\.\d{3}-\d)", texto)
+    if match_rut:
+        rut = match_rut.group(1)
+        if rut.startswith("65.191"):
+            return None, None, None
+    else:
+        rut = "RUT_NO_ENCONTRADO"
 
-    rut = rut_match.group(1) if rut_match else "RUT_NO_ENCONTRADO"
-
-    # Nombre completo justo después del RUT
-    nombre_match = re.search(r"\d{1,2}\.\d{3}\.\d{3}-\d\s+([A-ZÑÁÉÍÓÚ\s]+)", texto)
+    match_nombre = re.search(r"\d{1,2}\.\d{3}\.\d{3}-\d\s+([A-ZÑÁÉÍÓÚ\s]+)", texto)
     nombre = (
-        nombre_match.group(1).strip().title().replace("  ", " ")
-        if nombre_match
+        match_nombre.group(1).strip().title().replace("  ", " ")
+        if match_nombre
         else "NOMBRE_NO_ENCONTRADO"
     )
 
     return mes_nombre, rut, nombre
 
-def normalizar_nombre(nombre):
-    return unicodedata.normalize("NFKD", nombre).encode("ASCII", "ignore").decode()
-
-def procesar_pdf(pdf_subido):
-    reader = PdfReader(pdf_subido)
+def procesar_pdf(pdf_file):
     zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-        for i in range(0, len(reader.pages), 2):  # páginas impares
-            writer = PdfWriter()
-            writer.add_page(reader.pages[i])
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file, pdfplumber.open(pdf_file) as pdf:
+        for i in range(0, len(pdf.pages), 2):  # páginas impares
+            page = pdf.pages[i]
+            texto = page.extract_text()
 
-            texto = reader.pages[i].extract_text()
+            if not texto:
+                continue
+
             mes, rut, nombre = extraer_datos(texto)
-
             if not all([mes, rut, nombre]):
                 continue
 
-            nombre_normalizado = normalizar_nombre(nombre)
-            filename = f"ASISTENCIA_{mes.upper()}_{rut}_{nombre_normalizado.upper()}.pdf"
+            nombre_limpio = normalizar_nombre(nombre)
+            filename = f"ASISTENCIA_{mes.upper()}_{rut}_{nombre_limpio.upper()}.pdf"
 
-            pdf_buffer = io.BytesIO()
-            writer.write(pdf_buffer)
-            zip_file.writestr(filename, pdf_buffer.getvalue())
+            # Crear PDF individual
+            writer = PdfWriter()
+            writer.add_page(pdf.pages[i].to_pdf().pages[0])
+
+            buffer_pdf = io.BytesIO()
+            writer.write(buffer_pdf)
+            buffer_pdf.seek(0)
+            zip_file.writestr(filename, buffer_pdf.read())
 
     zip_buffer.seek(0)
     return zip_buffer
 
-# Interfaz Streamlit
-st.title("Separador de PDF por Empleado (Páginas Impares)")
-st.write("Sube un archivo PDF de asistencia y descarga los archivos individuales por empleado.")
+# Streamlit UI
+st.title("App para Separar Páginas Impares del PDF de Asistencia")
+st.write("Sube el PDF y descarga los archivos individuales de asistencia por empleado.")
 
-pdf_file = st.file_uploader("Sube tu PDF", type=["pdf"])
+uploaded_file = st.file_uploader("📄 Subir PDF", type=["pdf"])
 
-if pdf_file is not None:
-    with st.spinner("Procesando..."):
-        zip_resultado = procesar_pdf(pdf_file)
-    st.success("¡Listo! Descarga el ZIP con los archivos generados.")
+if uploaded_file:
+    with st.spinner("Procesando archivo..."):
+        zip_resultado = procesar_pdf(uploaded_file)
+
+    st.success("¡PDFs generados correctamente!")
     st.download_button(
-        label="📦 Descargar ZIP",
+        label="📦 Descargar ZIP con PDFs",
         data=zip_resultado,
-        file_name="asistencias_separadas.zip",
-        mime="application/zip",
+        file_name="asistencias.zip",
+        mime="application/zip"
     )
