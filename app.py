@@ -6,43 +6,42 @@ import unicodedata
 import pdfplumber
 from PyPDF2 import PdfReader, PdfWriter
 
-# Lista de meses en español
+# Meses en español (índice 1-12)
 MESES_ES = [
     "", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
     "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"
 ]
 
-# Normaliza el nombre quitando acentos y caracteres raros
+# Normaliza nombres eliminando acentos
 def normalizar_nombre(nombre):
     return unicodedata.normalize("NFKD", nombre).encode("ASCII", "ignore").decode()
 
-# Extrae datos clave desde el texto de la página
+# Extrae mes, RUT y nombre completo desde el texto
 def extraer_datos(texto):
+    # Extraer mes en número
     match_fecha = re.search(r"Periodo desde\s+(\d{2})/\d{2}/\d{4}", texto)
     mes_num = int(match_fecha.group(1)) if match_fecha else None
     mes_nombre = MESES_ES[mes_num] if mes_num and mes_num <= 12 else "Desconocido"
 
-    match_rut = re.search(r"(\d{1,2}\.\d{3}\.\d{3}-\d)", texto)
-    if match_rut:
-        rut = match_rut.group(1)
-        if rut.startswith("65.191"):
-            return None, None, None
-    else:
+    # Extraer RUT y nombre completo
+    match_rut_nombre = re.search(r"\d+\s+(\d{1,2}\.\d{3}\.\d{3}-\d)\s+([A-ZÑÁÉÍÓÚ]+(?:\s+[A-ZÑÁÉÍÓÚ]+)+)", texto)
+
+    if not match_rut_nombre:
         return None, None, None
 
-    match_nombre = re.search(r"\d{1,2}\.\d{3}\.\d{3}-\d\s+([A-ZÑÁÉÍÓÚ]+(?:\s+[A-ZÑÁÉÍÓÚ]+)+)", texto)
-    nombre = (
-        match_nombre.group(1).strip().title().replace("  ", " ")
-        if match_nombre else "NOMBRE_NO_ENCONTRADO"
-    )
+    rut = match_rut_nombre.group(1)
+    nombre = match_rut_nombre.group(2).strip().title()
+
+    if rut.startswith("65.191"):
+        return None, None, None
 
     return mes_nombre, rut, nombre
 
-# Procesa el PDF y genera los archivos separados
+# Procesa el PDF y genera los archivos individuales comprimidos en ZIP
 def procesar_pdf(uploaded_file):
     zip_buffer = io.BytesIO()
     reader = PdfReader(uploaded_file)
-    uploaded_file.seek(0)
+    uploaded_file.seek(0)  # Reiniciar para pdfplumber
 
     with pdfplumber.open(uploaded_file) as pdf, zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
         for i in range(0, len(reader.pages), 2):  # Solo páginas impares
@@ -67,10 +66,10 @@ def procesar_pdf(uploaded_file):
     zip_buffer.seek(0)
     return zip_buffer
 
-# Interfaz de usuario Streamlit
+# Interfaz de Streamlit
 st.set_page_config(page_title="Divisor de Asistencia por Empleado", layout="centered")
 st.title("📄 Dividir PDF de Asistencia por Empleado")
-st.write("Sube un archivo PDF de asistencia mensual. La app separará las páginas impares y generará archivos individuales por trabajador.")
+st.write("Sube un archivo PDF con asistencia mensual. Esta app separa las páginas impares y genera un archivo PDF individual por trabajador.")
 
 uploaded_file = st.file_uploader("📎 Sube el archivo PDF", type=["pdf"])
 
